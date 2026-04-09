@@ -16,6 +16,9 @@
 #define EASYNAV_EXPERIMENTS__SCAN_MODE_BRIDGE_HPP_
 
 
+#include <mutex>
+
+#include "geometry_msgs/msg/twist.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "std_srvs/srv/trigger.hpp"
@@ -37,6 +40,8 @@ public:
 private:
   void on_scan(const sensor_msgs::msg::LaserScan::SharedPtr msg);
 
+  void on_cmd_vel(const geometry_msgs::msg::Twist::SharedPtr msg);
+
   void on_trigger_mode(
     const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
     std::shared_ptr<std_srvs::srv::Trigger::Response> response);
@@ -46,8 +51,19 @@ private:
   Mode mode_{Mode::BRIDGE};
   float dist_blocked_{0.35f};
 
+  double stop_lin_eps_{0.01};
+  double stop_ang_eps_{0.01};
+
+  rclcpp::Clock steady_clock_{RCL_STEADY_TIME};
+
+  mutable std::mutex measurement_mutex_;
+  bool stop_measurement_active_{false};
+  bool stop_measurement_started_{false};
+  rclcpp::Time stop_measurement_start_time_{0, 0, RCL_STEADY_TIME};
+
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
   rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr scan_pub_;
+  rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr trigger_srv_;
 };
 

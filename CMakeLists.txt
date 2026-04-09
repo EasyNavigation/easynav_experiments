@@ -6,6 +6,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
+find_package(geometry_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
@@ -19,6 +20,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 )
 target_link_libraries(${PROJECT_NAME} PUBLIC
   rclcpp::rclcpp
+  ${geometry_msgs_TARGETS}
   ${sensor_msgs_TARGETS}
   ${std_srvs_TARGETS}
 )
@@ -55,6 +57,7 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_scan_mode_bridge
     rclcpp::rclcpp
+    ${geometry_msgs_TARGETS}
     ${sensor_msgs_TARGETS}
     ${std_srvs_TARGETS}
   )
@@ -67,6 +70,6 @@ endif()
 
 ament_export_include_directories("include/${PROJECT_NAME}")
 ament_export_libraries(${PROJECT_NAME})
-ament_export_dependencies(rclcpp sensor_msgs std_srvs)
+ament_export_dependencies(geometry_msgs rclcpp sensor_msgs std_srvs)
 
 ament_package()

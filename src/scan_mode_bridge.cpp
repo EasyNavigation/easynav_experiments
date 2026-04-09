@@ -15,6 +15,7 @@
 #include "easynav_experiments/scan_mode_bridge.hpp"
 
 #include <algorithm>
+#include <cinttypes>
 #include <cmath>
 #include <string>
 #include <utility>
@@ -43,6 +44,11 @@ ScanModeBridge::ScanModeBridge(const rclcpp::NodeOptions & options)
   declare_parameter("dist_blocked", 0.05);
   get_parameter("dist_blocked", dist_blocked_);
 
+  declare_parameter("stop_lin_eps", stop_lin_eps_);
+  get_parameter("stop_lin_eps", stop_lin_eps_);
+  declare_parameter("stop_ang_eps", stop_ang_eps_);
+  get_parameter("stop_ang_eps", stop_ang_eps_);
+
   if (!std::isfinite(dist_blocked_) || dist_blocked_ < 0.0f) {
     RCLCPP_WARN(get_logger(),
       "Invalid parameter dist_blocked=%.6f; using default 0.05",
@@ -56,6 +62,10 @@ ScanModeBridge::ScanModeBridge(const rclcpp::NodeOptions & options)
   scan_sub_ = create_subscription<sensor_msgs::msg::LaserScan>(
     "scan_raw", rclcpp::SensorDataQoS(),
     std::bind(&ScanModeBridge::on_scan, this, std::placeholders::_1));
+
+  cmd_vel_sub_ = create_subscription<geometry_msgs::msg::Twist>(
+    "cmd_vel", rclcpp::SystemDefaultsQoS(),
+    std::bind(&ScanModeBridge::on_cmd_vel, this, std::placeholders::_1));
 
   trigger_srv_ = create_service<std_srvs::srv::Trigger>(
     "trigger_mode",
@@ -76,8 +86,53 @@ void ScanModeBridge::on_scan(const sensor_msgs::msg::LaserScan::SharedPtr msg)
     return;
   }
 
+  {
+    std::scoped_lock<std::mutex> lock(measurement_mutex_);
+    if (stop_measurement_active_ && !stop_measurement_started_) {
+      stop_measurement_start_time_ = steady_clock_.now();
+      stop_measurement_started_ = true;
+      RCLCPP_INFO(get_logger(),
+        "Stop-timer started (mode=BLOCKED)");
+    }
+  }
+
   auto blocked = make_blocked(*msg);
   scan_pub_->publish(blocked);
+}
+
+void ScanModeBridge::on_cmd_vel(const geometry_msgs::msg::Twist::SharedPtr msg)
+{
+  if (!msg) {
+    return;
+  }
+
+  std::scoped_lock<std::mutex> lock(measurement_mutex_);
+  if (mode_ != Mode::BLOCKED || !stop_measurement_active_ || !stop_measurement_started_) {
+    return;
+  }
+
+  const double lin = std::sqrt(
+    msg->linear.x * msg->linear.x +
+    msg->linear.y * msg->linear.y +
+    msg->linear.z * msg->linear.z);
+  const double ang = std::sqrt(
+    msg->angular.x * msg->angular.x +
+    msg->angular.y * msg->angular.y +
+    msg->angular.z * msg->angular.z);
+
+  const bool stopped = (lin <= stop_lin_eps_) && (ang <= stop_ang_eps_);
+  if (!stopped) {
+    return;
+  }
+
+  const auto end_time = steady_clock_.now();
+  const auto dt = end_time - stop_measurement_start_time_;
+  const int64_t dt_us = dt.nanoseconds() / 1000;
+  RCLCPP_INFO(get_logger(),
+    "Robot stop detected after %" PRId64 " us (lin=%.4f, ang=%.4f; eps=(%.4f, %.4f))",
+    dt_us, lin, ang, stop_lin_eps_, stop_ang_eps_);
+
+  stop_measurement_active_ = false;
 }
 
 void ScanModeBridge::on_trigger_mode(
@@ -85,6 +140,18 @@ void ScanModeBridge::on_trigger_mode(
   std::shared_ptr<std_srvs::srv::Trigger::Response> response)
 {
   mode_ = (mode_ == Mode::BRIDGE) ? Mode::BLOCKED : Mode::BRIDGE;
+
+  {
+    std::scoped_lock<std::mutex> lock(measurement_mutex_);
+    if (mode_ == Mode::BLOCKED) {
+      stop_measurement_active_ = true;
+      stop_measurement_started_ = false;
+      stop_measurement_start_time_ = rclcpp::Time(0, 0, RCL_STEADY_TIME);
+    } else {
+      stop_measurement_active_ = false;
+      stop_measurement_started_ = false;
+    }
+  }
 
   if (response) {
     response->success = true;
